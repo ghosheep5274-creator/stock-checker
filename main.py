@@ -194,47 +194,63 @@ def run_hunting():
             
             # === 整合技術面與籌碼面的判斷邏輯 ===
             
-            # 1. 判斷是否為大盤 ETF (將不適用嚴格停損邏輯)
-            is_etf = ticker in ["006208.TW"]
+            # --- 1. 抓取所需指標 ---
+            last_rsi = recent_df['RSI'].iloc[-1]
+            prev_rsi = recent_df['RSI'].iloc[-2]
+            rsi_is_hooking = last_rsi > prev_rsi
+            ma60 = recent_df['60MA'].iloc[-1]
             
+            # --- 2. 根據 Beta 動態調整 RSI 甜美門檻 ---
             if current_beta > 1.2:
-                dynamic_rsi = 35  # 妖股或高科技股：跌深一點再撿
+                dynamic_rsi = 35
             elif current_beta < 0.8:
-                dynamic_rsi = 45  # 金融或防禦股：稍微超賣即可
+                dynamic_rsi = 45
             else:
-                dynamic_rsi = 40  # 一般股票
+                dynamic_rsi = 40
                 
-            if last_close < ma60:
-                # 2. 判斷跌破幅度 (設定 1% 緩衝，過濾假跌破)
+            # --- 3. 專屬 006208 核心防禦與獵殺邏輯 ---
+            if ticker == "006208.TW":
+                if last_close < ma60:
+                    if last_rsi < dynamic_rsi and rsi_is_hooking:
+                        msg += "💎 🚨 **【黃金坑出現】006208 破線且 RSI 止跌回升！維持每月 5,000 元定期定額，並建議動用 3,000 元主動預算獵殺加碼！**\n\n"
+                    else:
+                        msg += "🛡️ 🚨 **【長線防禦區】006208 已跌破季線。請無視短期波動，嚴格維持每月 5,000 元定期定額紀律，切勿恐慌停損。**\n\n"
+                elif last_rsi < dynamic_rsi and day_low < suggest_buy and rsi_is_hooking:
+                    msg += "🎯 🚨 **【大盤獵殺點】進入甜美區間！除了 5,000 元定期定額，可果斷投入 3,000 元主動預算。**\n\n"
+                elif day_high > suggest_sell or last_rsi > 70:
+                    msg += "🔥 **【大盤過熱】觸及布林上軌或 RSI 過熱。保留 3,000 元底火，僅維持 5,000 元定期定額即可。**\n\n"
+                else:
+                    msg += "🛡️ 【穩健巡航】大盤無極端訊號，安心維持每月 5,000 元定期定額。\n\n"
+            
+            # --- 4. 一般個股的攻防邏輯 ---
+            else:
                 is_confirmed_break = last_close < (ma60 * 0.99)
-                
-                # 3. 判斷是否為無情倒貨 (連續賣 3 天以上，或是土洋雙殺)
                 heavy_dumping = (fc <= -3 or tc <= -3) or (fc < 0 and tc < 0)
-
-                if is_etf:
-                    msg += "💡 🚨 **【長線佈局區】大盤跌破季線，請維持既有紀律，切勿恐慌停損。**\n\n"
-                elif is_confirmed_break and heavy_dumping:
-                    msg += "💀 🚨 **【確認破線且無情倒貨】跌破季線 1% 且法人大賣，請立刻嚴格停損！**\n\n"
-                elif heavy_dumping:
-                    msg += "⚠️ 🚨 **【大戶倒貨中】法人無情拋售，雖未完全破線，請緊盯減碼時機。**\n\n"
-                elif is_confirmed_break:
-                    msg += "⚠️ 🚨 **【趨勢破線】已實體跌破 60 日季線，觀察 3 日內能否站回，準備減碼。**\n\n"
+                
+                if last_close < ma60:
+                    if is_confirmed_break and heavy_dumping:
+                        msg += "💀 🚨 **【確認破線且無情倒貨】跌破季線 1% 且法人大賣，請立刻嚴格停損！**\n\n"
+                    elif heavy_dumping:
+                        msg += "⚠️ 🚨 **【大戶倒貨中】法人無情拋售，雖未完全破線，請緊盯減碼時機。**\n\n"
+                    elif is_confirmed_break:
+                        msg += "⚠️ 🚨 **【趨勢破線】已實體跌破 60 日季線，觀察 3 日內能否站回，準備減碼。**\n\n"
+                    else:
+                        msg += "⚠️ 【季線保衛戰】剛觸碰季線邊緣，注意法人後續動向。\n\n"
+                elif day_high > suggest_sell or last_rsi > 70:
+                    msg += "🔴 🚨 **【波段停利】觸及布林上軌或 RSI 過熱，波段單可分批獲利了結。**\n\n"
+                elif last_rsi < dynamic_rsi and day_low < suggest_buy:
+                    if not rsi_is_hooking:
+                        msg += f"🔪 ⚠️ **【接刀警告】已跌至布林下軌 (RSI: {last_rsi:.1f})，但仍未止跌，請暫緩動用資金！**\n\n"
+                    elif fc > 0 or tc > 0:
+                        msg += "✅ 🚨 **【法人抬轎買點】止跌回升且法人偷買！建議果斷投入。**\n\n"
+                    elif current_beta > 1.3:
+                        msg += "🚀 🚨 **【止跌反轉但高波動】RSI 已勾頭，但股性較妖，建議先試水溫。**\n\n"
+                    else:
+                        msg += "🎯 🚨 **【黃金獵殺點】打到下軌且 RSI 止跌回升！建議果斷投入。**\n\n"
+                elif last_rsi < target_rsi or day_low < suggest_buy:
+                    msg += "⚠️ 【接近買點】已進入觀察區，等待止跌訊號。\n\n"
                 else:
-                    msg += "⚠️ 【季線保衛戰】剛觸碰季線邊緣，注意法人後續動向。\n\n"
-                    
-            elif last_rsi < dynamic_rsi and day_low < suggest_buy:
-                if not rsi_is_hooking:
-                    msg += f"🔪 ⚠️ **【接刀警告】已跌至布林下軌 (RSI: {last_rsi:.1f})，但仍未止跌，請暫緩動用資金！**\n\n"
-                elif fc > 0 or tc > 0:
-                    msg += "✅ 🚨 **【法人抬轎買點】止跌回升且法人偷買！建議果斷投入 3,000 元。**\n\n"
-                elif current_beta > 1.3:
-                    msg += "🚀 🚨 **【止跌反轉但高波動】RSI 已勾頭，但股性較妖，建議先動用 1,500 元試水溫。**\n\n"
-                else:
-                    msg += "🎯 🚨 **【黃金獵殺點】打到下軌且 RSI 止跌回升！建議投入 3,000 元。**\n\n"
-            elif last_rsi < target_rsi or day_low < suggest_buy:
-                msg += "⚠️ 【接近買點】已進入觀察區，等待止跌訊號。\n\n"
-            else:
-                msg += "😴 【穩定】無強烈訊號，維持紀律。\n\n"
+                    msg += "😴 【穩定】無強烈訊號，維持紀律。\n\n"
             
             time.sleep(0.5)
         
