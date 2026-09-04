@@ -3,8 +3,11 @@ name: Daily Stock Checker
 on:
   workflow_dispatch: 
   schedule:
-    # 台灣時間下午 2:30 執行 (UTC 6:30)
-    - cron: '30 6 * * 1-5'
+    # 規則一：台灣時間 09:00 到 12:50 (UTC 1:00 到 4:50)，每 10 分鐘執行一次
+    - cron: '*/10 1-4 * * 1-5'
+    
+    # 規則二：台灣時間 13:00 到 13:30 (UTC 5:00 到 5:30)，每 10 分鐘執行一次
+    - cron: '0,10,20,30 5 * * 1-5'
 
 jobs:
   run-check:
