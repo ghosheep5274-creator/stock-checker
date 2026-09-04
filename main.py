@@ -112,8 +112,7 @@ def run_hunting():
     stock_categories = {
         "📊 【ETF 與 大型權值】": {
             "006208.TW": "富邦台50",
-            "2330.TW": "台積電",
-            "2354.TW": "鴻準"
+            "2330.TW": "台積電"
         },
         "🏦 【金融控股與銀行】": {
             "2801.TW": "彰銀",
@@ -133,7 +132,8 @@ def run_hunting():
         "🔌 【電子零組件與光電】": {
             "3481.TW": "群創",
             "3526.TWO": "凡甲",
-            "3679.TW": "新至陞"
+            "3679.TW": "新至陞",
+            "2354.TW": "鴻準"
         }
     }
     
@@ -143,7 +143,7 @@ def run_hunting():
     
     print("📥 開始下載大盤資料作為基準...")
     # 將資料抓取期間延長至 2 年 (2y)，確保能計算出 240 日年線
-    market_df = yf.Ticker(benchmark).history(period="2y")
+    market_df = yf.Ticker(benchmark).history(period="2y").dropna()
     if market_df.empty:
         print("⚠️ 無法獲取大盤資料，結束執行。")
         return "⚠️ 大盤資料獲取失敗，系統暫停播報。"
@@ -158,7 +158,7 @@ def run_hunting():
         
         for ticker, name in stocks.items():
             print(f"⚙️ 正在處理: {name} ({ticker})...")
-            df = yf.Ticker(ticker).history(period="2y")
+            df = yf.Ticker(ticker).history(period="2y").dropna()
             
             if df.empty or len(df) < 60: 
                 print(f"⚠️ {name} 抓不到足夠資料，跳過。")
@@ -172,6 +172,13 @@ def run_hunting():
             bb = ta.bbands(recent_df['Close'], length=20, std=bb_std)
             recent_df['60MA'] = ta.sma(recent_df['Close'], length=60)
             recent_df['240MA'] = ta.sma(recent_df['Close'], length=240)
+            
+            # --- 新增：成交量與 20 日均量計算 ---
+            recent_df['Volume_20MA'] = recent_df['Volume'].rolling(window=20).mean()
+            current_volume = recent_df['Volume'].iloc[-1]
+            mv20 = recent_df['Volume_20MA'].iloc[-1]
+            is_volume_fueled = current_volume > (mv20 * 1.2)
+            # ------------------------------------
             
             # 過濾無效指標 (若上市不滿一年無年線，則以季線代替作為防護)
             if bb is None or bb.empty or recent_df['60MA'].isna().iloc[-1] or pd.isna(recent_df['RSI'].iloc[-1]): 
@@ -254,16 +261,25 @@ def run_hunting():
                     msg += "⚠️ 🚨 **【趨勢破線】實體跌破季線，觀察 3 日能否站回，準備減碼。**\n\n"
                 elif day_high > suggest_sell or last_rsi > 70:
                     msg += "🔴 🚨 **【波段停利】觸及布林上軌或 RSI 過熱，波段單可分批獲利。**\n\n"
-                elif last_rsi < dynamic_rsi and day_low < suggest_buy:
+                
+                # 💡 修復盲區：只要 RSI 超賣 或 跌破布林下軌，就進入嚴格審查區
+                elif day_low < suggest_buy or last_rsi < dynamic_rsi:
                     if not rsi_is_hooking:
-                        msg += f"🔪 ⚠️ **【接刀警告】跌至下軌 (RSI: {last_rsi:.1f}) 但未止跌，暫緩動用資金！**\n\n"
+                        msg += f"🔪 ⚠️ **【接刀警告】急跌修正中 (RSI: {last_rsi:.1f}) 且未見止跌，手綁起來拒絕接刀！**\n\n"
+                    
+                    # 💡 結合量能與法人的「黃金爆量買點」
+                    elif (fc > 0 or tc > 0) and is_volume_fueled:
+                        msg += "✅ 🧲 **【大鯨魚爆量抬轎】高勝率獵殺點出現！建議直接啟動「獵殺蓄水池」總額重擊加碼。**\n\n"
+                        
                     elif fc > 0 or tc > 0:
-                        msg += "✅ 🚨 **【法人抬轎買點】止跌回升且法人偷買！建議果斷投入。**\n\n"
+                        msg += "✅ 🚨 **【法人抬轎買點】止跌回升且法人偷買！建議動用單月 3,000 元額度佈局。**\n\n"
                     elif current_beta > 1.3:
                         msg += "🚀 🚨 **【止跌反轉但高波動】股性較妖，建議先試水溫。**\n\n"
                     else:
                         msg += "🎯 🚨 **【黃金獵殺點】打到下軌且 RSI 止跌回升！建議果斷投入。**\n\n"
-                elif last_rsi < target_rsi or day_low < suggest_buy:
+                        
+                # 獨立的觀察區邏輯，絕不與急跌破線衝突
+                elif last_rsi < target_rsi:
                     msg += "⚠️ 【接近買點】已進入觀察區，等待止跌訊號。\n\n"
                 else:
                     msg += "😴 【穩定】無強烈訊號，維持波段紀律。\n\n"
