@@ -7,6 +7,7 @@ import warnings
 import time
 from datetime import datetime, timedelta
 
+
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 def calculate_beta(stock_data, market_data):
