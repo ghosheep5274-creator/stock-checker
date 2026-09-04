@@ -52,9 +52,24 @@ def get_chip_trend(stock_id):
     return 0, 0
 
 def send_discord_msg(msg, webhook_url):
-    # 處理 Discord 2000 字元限制，每 1900 字切塊
-    chunks = [msg[i:i+1900] for i in range(0, len(msg), 1900)]
-    print(f"準備發送訊息，共切分為 {len(chunks)} 段...")
+    # 聰明的切分法：按「行」切分，絕對不會切斷 Markdown 符號
+    lines = msg.split('\n')
+    chunks = []
+    current_chunk = ""
+    
+    for line in lines:
+        # 如果目前這包加上新的一行會超過 1900 字，就先封箱，開新的一包
+        if len(current_chunk) + len(line) + 1 > 1900:
+            chunks.append(current_chunk)
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+            
+    # 把最後剩下的裝進去
+    if current_chunk.strip():
+        chunks.append(current_chunk)
+
+    print(f"準備發送訊息，依行數安全切分為 {len(chunks)} 段...")
     
     for idx, chunk in enumerate(chunks, 1):
         response = requests.post(webhook_url, json={"content": chunk})
