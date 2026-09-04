@@ -4,17 +4,64 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import warnings
+import time
+from datetime import datetime, timedelta
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 def calculate_beta(stock_data, market_data):
-    """計算個股相對於大盤的 Beta 值"""
     combined = pd.concat([stock_data['Close'], market_data['Close']], axis=1).dropna()
     combined.columns = ['Stock', 'Market']
     returns = combined.pct_change().dropna()
     covariance = returns['Stock'].cov(returns['Market'])
     market_variance = returns['Market'].var()
     return covariance / market_variance
+
+def get_chip_trend(stock_id):
+    """取得外資與投信的連續買賣超天數"""
+    url = "https://api.finmindtrade.com/api/v4/data"
+    # 抓取近 20 天的資料以確保有足夠的交易日可供計算
+    start_date = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+    
+    parameter = {
+        "dataset": "TaiwanStockInstitutionalInvestorsBuySell",
+        "data_id": stock_id,
+        "start_date": start_date,
+    }
+    
+    try:
+        resp = requests.get(url, params=parameter, timeout=5)
+        data = resp.json()
+        if data.get("msg") == "success" and len(data.get("data", [])) > 0:
+            df = pd.DataFrame(data["data"])
+            
+            # 篩選外資與投信的資料
+            df_foreign = df[df['name'].str.contains('外資')]
+            df_trust = df[df['name'] == '投信']
+            
+            # 依日期加總淨買賣超股數
+            foreign_daily = df_foreign.groupby('date')['sell_buy'].sum()
+            trust_daily = df_trust.groupby('date')['sell_buy'].sum()
+            
+            def count_consecutive(series):
+                if series.empty: return 0
+                count = 0
+                is_buy = series.iloc[-1] > 0
+                if series.iloc[-1] == 0: return 0
+                
+                # 從最新的一天往前推算
+                for val in series.iloc[::-1]:
+                    if (val > 0) == is_buy and val != 0:
+                        count += 1 if is_buy else -1
+                    else:
+                        break
+                return count
+                
+            return count_consecutive(foreign_daily), count_consecutive(trust_daily)
+    except Exception:
+        pass
+    
+    return 0, 0
 
 def send_discord_msg(msg, webhook_url):
     requests.post(webhook_url, json={"content": msg})
@@ -60,6 +107,7 @@ def run_hunting():
         msg += f"======== {category_name} ========\n"
         
         for ticker, name in stocks.items():
+            # yfinance 獲取技術面
             df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
             if df.empty: continue
             
@@ -68,11 +116,8 @@ def run_hunting():
                 
             current_beta = calculate_beta(df, market_df)
             recent_df = df.tail(100).copy()
-            
-            # 技術指標計算
             recent_df['RSI'] = ta.rsi(recent_df['Close'], length=14)
             bb = ta.bbands(recent_df['Close'], length=20, std=bb_std)
-            # 新增：計算 60 日季線
             recent_df['60MA'] = ta.sma(recent_df['Close'], length=60)
             
             if bb is None or bb.empty or recent_df['60MA'].isna().iloc[-1]: 
@@ -83,23 +128,35 @@ def run_hunting():
             day_high = recent_df['High'].iloc[-1]
             last_rsi = recent_df['RSI'].iloc[-1]
             ma60 = recent_df['60MA'].iloc[-1]
-            
-            # 布林通道下軌(買點)與上軌(賣點)
-            suggest_buy = bb.iloc[-1, 0]   # BBL
-            suggest_sell = bb.iloc[-1, 2]  # BBU
-            
+            suggest_buy = bb.iloc[-1, 0]   
+            suggest_sell = bb.iloc[-1, 2]  
             beta_status = "穩健" if current_beta < 1 else "激進"
             
+            # FinMind 獲取籌碼面 (移除 .TW / .TWO 以符合 API 格式)
+            pure_ticker = ticker.split(".")[0]
+            fc, tc = get_chip_trend(pure_ticker)
+            
+            # 將連續買賣天數轉為友善文字
+            fc_str = f"連買 {fc} 天" if fc > 0 else (f"連賣 {abs(fc)} 天" if fc < 0 else "無明顯動向")
+            tc_str = f"連買 {tc} 天" if tc > 0 else (f"連賣 {abs(tc)} 天" if tc < 0 else "無明顯動向")
+            
+            # 排版輸出
             msg += f"**【{name} ({ticker})】** 收盤: `{last_close:.1f}` | 季線: `{ma60:.1f}`\n"
             msg += f"📊 RSI: `{last_rsi:.1f}` | 區間: `{suggest_buy:.1f}` ~ `{suggest_sell:.1f}`\n"
+            msg += f"🏦 籌碼: 外資 `{fc_str}` | 投信 `{tc_str}`\n"
             
-            # 判斷邏輯 (由危險到安全排序)
+            # 整合技術面與籌碼面的判斷邏輯
             if last_close < ma60:
-                msg += "⚠️ 🚨 **【趨勢破線】已跌破 60 日季線，請留意停損或減碼時機。**\n\n"
+                if fc < 0 or tc < 0:
+                    msg += "⚠️ 🚨 **【破線且大戶倒貨】跌破季線且法人連賣，請嚴格執行停損或減碼！**\n\n"
+                else:
+                    msg += "⚠️ 🚨 **【趨勢破線】已跌破 60 日季線，請留意停損或減碼時機。**\n\n"
             elif day_high > suggest_sell or last_rsi > 70:
                 msg += "🔴 🚨 **【波段停利】觸及布林上軌或 RSI 過熱，波段單可分批獲利了結。**\n\n"
             elif last_rsi < target_rsi and day_low < suggest_buy:
-                if current_beta > 1.3:
+                if fc > 0 or tc > 0:
+                    msg += "✅ 🚨 **【法人抬轎買點】進入收藏區且法人連買！建議投入 3,000 元。**\n\n"
+                elif current_beta > 1.3:
                     msg += "🚀 🚨 **【強烈買訊但高波動】建議先動用 1,500 元。**\n\n"
                 else:
                     msg += "✅ 🚨 **【黃金獵殺點】進入收藏區！建議投入 3,000 元。**\n\n"
@@ -107,6 +164,9 @@ def run_hunting():
                 msg += "⚠️ 【接近買點】適合分批布局。\n\n"
             else:
                 msg += "😴 【穩定】無強烈訊號，維持紀律。\n\n"
+            
+            # 稍作延遲，避免密集呼叫被 API 阻擋
+            time.sleep(0.3)
         
         msg += "\n"
                 
