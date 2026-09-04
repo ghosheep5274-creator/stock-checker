@@ -10,41 +10,52 @@ from datetime import datetime, timedelta
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 def calculate_beta(stock_data, market_data):
-    combined = pd.concat([stock_data['Close'], market_data['Close']], axis=1).dropna()
+    # 剝離時區，確保合併時日期能完美對齊
+    stock_close = stock_data['Close'].copy()
+    market_close = market_data['Close'].copy()
+    stock_close.index = stock_close.index.tz_localize(None)
+    market_close.index = market_close.index.tz_localize(None)
+    
+    combined = pd.concat([stock_close, market_close], axis=1).dropna()
     combined.columns = ['Stock', 'Market']
     returns = combined.pct_change().dropna()
+    
     covariance = returns['Stock'].cov(returns['Market'])
     market_variance = returns['Market'].var()
     return covariance / market_variance
 
 def get_chip_trend(stock_id):
     url = "https://api.finmindtrade.com/api/v4/data"
-    start_date = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+    # 延長至 40 天，避免連假導致抓無交易日資料
+    start_date = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
     parameter = {
         "dataset": "TaiwanStockInstitutionalInvestorsBuySell",
         "data_id": stock_id,
         "start_date": start_date,
     }
+    # 增加 User-Agent 防止被 API 防火牆阻擋
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    
     try:
-        resp = requests.get(url, params=parameter, timeout=5)
+        resp = requests.get(url, params=parameter, headers=headers, timeout=10)
         data = resp.json()
         
         if data.get("msg") == "success" and len(data.get("data", [])) > 0:
             df = pd.DataFrame(data["data"])
             
-            # 防呆機制：如果沒有 sell_buy 欄位，我們自己用 buy 和 sell 減出來
+            # 防呆機制
             if 'sell_buy' not in df.columns:
                 if 'buy' in df.columns and 'sell' in df.columns:
                     df['sell_buy'] = df['buy'] - df['sell']
                 else:
-                    print(f"⚠️ [{stock_id}] 找不到買賣超欄位，目前的欄位有: {df.columns.tolist()}")
                     return 0, 0
                     
             df_foreign = df[df['name'].str.contains('外資')]
             df_trust = df[df['name'] == '投信']
             
-            foreign_daily = df_foreign.groupby('date')['sell_buy'].sum()
-            trust_daily = df_trust.groupby('date')['sell_buy'].sum()
+            # 確保按日期排序
+            foreign_daily = df_foreign.sort_values('date').groupby('date')['sell_buy'].sum()
+            trust_daily = df_trust.sort_values('date').groupby('date')['sell_buy'].sum()
             
             def count_consecutive(series):
                 if series.empty: return 0
@@ -59,31 +70,24 @@ def get_chip_trend(stock_id):
                 return count
                 
             return count_consecutive(foreign_daily), count_consecutive(trust_daily)
-        else:
-            # 如果 API 拒絕我們，把原因印在日誌裡
-            print(f"⚠️ [{stock_id}] FinMind 抓取失敗，原因: {data.get('msg')}")
             
     except Exception as e:
-        # 如果發生預期外的崩潰，印出具體錯誤
         print(f"❌ [{stock_id}] 籌碼計算發生錯誤: {e}")
         
     return 0, 0
     
 def send_discord_msg(msg, webhook_url):
-    # 聰明的切分法：按「行」切分，絕對不會切斷 Markdown 符號
     lines = msg.split('\n')
     chunks = []
     current_chunk = ""
     
     for line in lines:
-        # 如果目前這包加上新的一行會超過 1900 字，就先封箱，開新的一包
         if len(current_chunk) + len(line) + 1 > 1900:
             chunks.append(current_chunk)
             current_chunk = line + "\n"
         else:
             current_chunk += line + "\n"
             
-    # 把最後剩下的裝進去
     if current_chunk.strip():
         chunks.append(current_chunk)
 
@@ -131,7 +135,11 @@ def run_hunting():
     bb_std = 2.0  
     
     print("📥 開始下載大盤資料作為基準...")
-    market_df = yf.download(benchmark, period="1y", interval="1d", progress=False, auto_adjust=True)
+    # 改用 Ticker().history 寫法，避免 MultiIndex 問題
+    market_df = yf.Ticker(benchmark).history(period="1y")
+    if market_df.empty:
+        print("⚠️ 無法獲取大盤資料，結束執行。")
+        return "⚠️ 大盤資料獲取失敗，系統暫停播報。"
     
     msg = f"🔍 **獵殺與防禦系統監控中** (買進 RSI < {target_rsi} / 賣出 RSI > 70)\n\n"
     
@@ -140,13 +148,12 @@ def run_hunting():
         
         for ticker, name in stocks.items():
             print(f"⚙️ 正在處理: {name} ({ticker})...")
-            df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
-            if df.empty: 
-                print(f"⚠️ {name} 抓不到資料，跳過。")
-                continue
+            # 改用 Ticker().history 確保穩定抓取個股
+            df = yf.Ticker(ticker).history(period="1y")
             
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+            if df.empty or len(df) < 60: 
+                print(f"⚠️ {name} 抓不到足夠資料，跳過。")
+                continue
                 
             current_beta = calculate_beta(df, market_df)
             recent_df = df.tail(100).copy()
@@ -154,7 +161,8 @@ def run_hunting():
             bb = ta.bbands(recent_df['Close'], length=20, std=bb_std)
             recent_df['60MA'] = ta.sma(recent_df['Close'], length=60)
             
-            if bb is None or bb.empty or recent_df['60MA'].isna().iloc[-1]: 
+            # 過濾無效指標
+            if bb is None or bb.empty or recent_df['60MA'].isna().iloc[-1] or pd.isna(recent_df['RSI'].iloc[-1]): 
                 continue
             
             last_close = recent_df['Close'].iloc[-1]
@@ -172,8 +180,8 @@ def run_hunting():
             fc_str = f"連買 {fc} 天" if fc > 0 else (f"連賣 {abs(fc)} 天" if fc < 0 else "無明顯動向")
             tc_str = f"連買 {tc} 天" if tc > 0 else (f"連賣 {abs(tc)} 天" if tc < 0 else "無明顯動向")
             
-            msg += f"**【{name} ({ticker})】** 收盤: `{last_close:.1f}` | 季線: `{ma60:.1f}`\n"
-            msg += f"📊 RSI: `{last_rsi:.1f}` | 區間: `{suggest_buy:.1f}` ~ `{suggest_sell:.1f}`\n"
+            msg += f"**【{name} ({ticker})】** 收盤: `{last_close:.2f}` | 季線: `{ma60:.2f}`\n"
+            msg += f"📊 RSI: `{last_rsi:.1f}` | 區間: `{suggest_buy:.2f}` ~ `{suggest_sell:.2f}`\n"
             msg += f"🏦 籌碼: 外資 `{fc_str}` | 投信 `{tc_str}`\n"
             
             if last_close < ma60:
@@ -195,15 +203,12 @@ def run_hunting():
             else:
                 msg += "😴 【穩定】無強烈訊號，維持紀律。\n\n"
             
-            time.sleep(0.3)
+            time.sleep(0.5)
         
         msg += "\n"
                 
     return msg
 
-# ==========================================
-# 這裡是啟動引擎，絕對不能刪掉這段！
-# ==========================================
 if __name__ == "__main__":
     print("🚀 啟動獵殺小隊腳本...")
     discord_url = os.environ.get("DISCORD_WEBHOOK_URL")
