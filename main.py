@@ -28,10 +28,21 @@ def get_chip_trend(stock_id):
     try:
         resp = requests.get(url, params=parameter, timeout=5)
         data = resp.json()
+        
         if data.get("msg") == "success" and len(data.get("data", [])) > 0:
             df = pd.DataFrame(data["data"])
+            
+            # 防呆機制：如果沒有 sell_buy 欄位，我們自己用 buy 和 sell 減出來
+            if 'sell_buy' not in df.columns:
+                if 'buy' in df.columns and 'sell' in df.columns:
+                    df['sell_buy'] = df['buy'] - df['sell']
+                else:
+                    print(f"⚠️ [{stock_id}] 找不到買賣超欄位，目前的欄位有: {df.columns.tolist()}")
+                    return 0, 0
+                    
             df_foreign = df[df['name'].str.contains('外資')]
             df_trust = df[df['name'] == '投信']
+            
             foreign_daily = df_foreign.groupby('date')['sell_buy'].sum()
             trust_daily = df_trust.groupby('date')['sell_buy'].sum()
             
@@ -46,11 +57,18 @@ def get_chip_trend(stock_id):
                     else:
                         break
                 return count
+                
             return count_consecutive(foreign_daily), count_consecutive(trust_daily)
-    except Exception:
-        pass
+        else:
+            # 如果 API 拒絕我們，把原因印在日誌裡
+            print(f"⚠️ [{stock_id}] FinMind 抓取失敗，原因: {data.get('msg')}")
+            
+    except Exception as e:
+        # 如果發生預期外的崩潰，印出具體錯誤
+        print(f"❌ [{stock_id}] 籌碼計算發生錯誤: {e}")
+        
     return 0, 0
-
+    
 def send_discord_msg(msg, webhook_url):
     # 聰明的切分法：按「行」切分，絕對不會切斷 Markdown 符號
     lines = msg.split('\n')
