@@ -1,0 +1,20 @@
+name: Daily Stock Checker
+
+on:
+  workflow_dispatch: 
+  schedule:
+    # 台灣時間下午 2:30 執行 (UTC 6:30)
+    - cron: '30 6 * * 1-5'
+
+jobs:
+  run-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install -r requirements.txt
+      - env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python main.py
