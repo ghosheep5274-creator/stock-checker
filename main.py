@@ -20,27 +20,31 @@ def send_discord_msg(msg, webhook_url):
     requests.post(webhook_url, json={"content": msg})
 
 def run_hunting():
-    tickers = ["006208.TW", "2330.TW", "8299.TWO"]
+    # 這裡改成字典格式： "代號": "中文名稱"
+    stock_dict = {
+        "006208.TW": "富邦台50",
+        "2330.TW": "台積電",
+        "8299.TWO": "群聯"
+    }
+    
     benchmark = "^TWII"  
     target_rsi = 45
     bb_std = 2.0  
     
-    # 預先下載大盤數據用於計算 Beta
     market_df = yf.download(benchmark, period="1y", interval="1d", progress=False, auto_adjust=True)
     
     msg = f"🔍 **獵殺小隊監控中** (目標：RSI < {target_rsi}, 偏離度: {bb_std}σ)\n"
     msg += "-" * 40 + "\n"
     
-    for ticker in tickers:
+    # 這裡把迴圈改成讀取字典的代號與名稱
+    for ticker, name in stock_dict.items():
         df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
         if df.empty: continue
         
-        # 處理 yfinance 新版的 MultiIndex 問題
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
         current_beta = calculate_beta(df, market_df)
-        
         recent_df = df.tail(100).copy()
         recent_df['RSI'] = ta.rsi(recent_df['Close'], length=14)
         bb = ta.bbands(recent_df['Close'], length=20, std=bb_std)
@@ -50,11 +54,12 @@ def run_hunting():
         last_close = recent_df['Close'].iloc[-1]
         day_low = recent_df['Low'].iloc[-1]
         last_rsi = recent_df['RSI'].iloc[-1]
-        suggest_buy = bb.iloc[-1, 0] # BBL (下軌)
+        suggest_buy = bb.iloc[-1, 0] 
         
         beta_status = "穩健" if current_beta < 1 else "激進"
         
-        msg += f"**【{ticker}】** 價格: `{last_close:.1f}` | 建議收藏價: `{suggest_buy:.2f}`\n"
+        # 這裡的輸出加入了變數 {name}
+        msg += f"**【{name} ({ticker})】** 價格: `{last_close:.1f}` | 建議收藏價: `{suggest_buy:.2f}`\n"
         msg += f"📊 當前 RSI: `{last_rsi:.1f}` | 波動 Beta: `{current_beta:.2f}` ({beta_status})\n"
         
         if last_rsi < target_rsi and day_low < suggest_buy:
