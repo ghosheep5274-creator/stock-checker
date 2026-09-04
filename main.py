@@ -18,28 +18,20 @@ def calculate_beta(stock_data, market_data):
     return covariance / market_variance
 
 def get_chip_trend(stock_id):
-    """取得外資與投信的連續買賣超天數"""
     url = "https://api.finmindtrade.com/api/v4/data"
-    # 抓取近 20 天的資料以確保有足夠的交易日可供計算
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
-    
     parameter = {
         "dataset": "TaiwanStockInstitutionalInvestorsBuySell",
         "data_id": stock_id,
         "start_date": start_date,
     }
-    
     try:
         resp = requests.get(url, params=parameter, timeout=5)
         data = resp.json()
         if data.get("msg") == "success" and len(data.get("data", [])) > 0:
             df = pd.DataFrame(data["data"])
-            
-            # 篩選外資與投信的資料
             df_foreign = df[df['name'].str.contains('外資')]
             df_trust = df[df['name'] == '投信']
-            
-            # 依日期加總淨買賣超股數
             foreign_daily = df_foreign.groupby('date')['sell_buy'].sum()
             trust_daily = df_trust.groupby('date')['sell_buy'].sum()
             
@@ -48,34 +40,28 @@ def get_chip_trend(stock_id):
                 count = 0
                 is_buy = series.iloc[-1] > 0
                 if series.iloc[-1] == 0: return 0
-                
-                # 從最新的一天往前推算
                 for val in series.iloc[::-1]:
                     if (val > 0) == is_buy and val != 0:
                         count += 1 if is_buy else -1
                     else:
                         break
                 return count
-                
             return count_consecutive(foreign_daily), count_consecutive(trust_daily)
     except Exception:
         pass
-    
     return 0, 0
 
 def send_discord_msg(msg, webhook_url):
-    # 處理 Discord 的 2000 字元限制，每 1900 字切成一塊分批發送
+    # 處理 Discord 2000 字元限制，每 1900 字切塊
     chunks = [msg[i:i+1900] for i in range(0, len(msg), 1900)]
+    print(f"準備發送訊息，共切分為 {len(chunks)} 段...")
     
-    for chunk in chunks:
+    for idx, chunk in enumerate(chunks, 1):
         response = requests.post(webhook_url, json={"content": chunk})
-        # 如果 Discord 拒收，把錯誤印在 GitHub 的日誌裡方便我們抓蟲
         if response.status_code not in [200, 204]:
-            print(f"❌ Discord 發送失敗，狀態碼: {response.status_code}, 錯誤: {response.text}")
+            print(f"❌ 第 {idx} 段發送失敗，狀態碼: {response.status_code}, 錯誤: {response.text}")
         else:
-            print("✅ Discord 單筆訊息發送成功！")
-            
-        # 稍微暫停一下，避免發送太快被 Discord 當作惡意洗版
+            print(f"✅ 第 {idx} 段訊息發送成功！")
         time.sleep(1)
 
 def run_hunting():
@@ -111,6 +97,7 @@ def run_hunting():
     target_rsi = 45
     bb_std = 2.0  
     
+    print("📥 開始下載大盤資料作為基準...")
     market_df = yf.download(benchmark, period="1y", interval="1d", progress=False, auto_adjust=True)
     
     msg = f"🔍 **獵殺與防禦系統監控中** (買進 RSI < {target_rsi} / 賣出 RSI > 70)\n\n"
@@ -119,9 +106,11 @@ def run_hunting():
         msg += f"======== {category_name} ========\n"
         
         for ticker, name in stocks.items():
-            # yfinance 獲取技術面
+            print(f"⚙️ 正在處理: {name} ({ticker})...")
             df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
-            if df.empty: continue
+            if df.empty: 
+                print(f"⚠️ {name} 抓不到資料，跳過。")
+                continue
             
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
@@ -144,27 +133,23 @@ def run_hunting():
             suggest_sell = bb.iloc[-1, 2]  
             beta_status = "穩健" if current_beta < 1 else "激進"
             
-            # FinMind 獲取籌碼面 (移除 .TW / .TWO 以符合 API 格式)
             pure_ticker = ticker.split(".")[0]
             fc, tc = get_chip_trend(pure_ticker)
             
-            # 將連續買賣天數轉為友善文字
             fc_str = f"連買 {fc} 天" if fc > 0 else (f"連賣 {abs(fc)} 天" if fc < 0 else "無明顯動向")
             tc_str = f"連買 {tc} 天" if tc > 0 else (f"連賣 {abs(tc)} 天" if tc < 0 else "無明顯動向")
             
-            # 排版輸出
             msg += f"**【{name} ({ticker})】** 收盤: `{last_close:.1f}` | 季線: `{ma60:.1f}`\n"
             msg += f"📊 RSI: `{last_rsi:.1f}` | 區間: `{suggest_buy:.1f}` ~ `{suggest_sell:.1f}`\n"
             msg += f"🏦 籌碼: 外資 `{fc_str}` | 投信 `{tc_str}`\n"
             
-            # 整合技術面與籌碼面的判斷邏輯
             if last_close < ma60:
                 if fc < 0 or tc < 0:
-                    msg += "⚠️ 🚨 **【破線且大戶倒貨】跌破季線且法人連賣，請嚴格執行停損或減碼！**\n\n"
+                    msg += "⚠️ 🚨 **【破線且大戶倒貨】跌破季線且法人連賣，嚴格停損！**\n\n"
                 else:
-                    msg += "⚠️ 🚨 **【趨勢破線】已跌破 60 日季線，請留意停損或減碼時機。**\n\n"
+                    msg += "⚠️ 🚨 **【趨勢破線】已跌破 60 日季線，留意停損或減碼。**\n\n"
             elif day_high > suggest_sell or last_rsi > 70:
-                msg += "🔴 🚨 **【波段停利】觸及布林上軌或 RSI 過熱，波段單可分批獲利了結。**\n\n"
+                msg += "🔴 🚨 **【波段停利】觸及布林上軌或 RSI 過熱，可分批獲利。**\n\n"
             elif last_rsi < target_rsi and day_low < suggest_buy:
                 if fc > 0 or tc > 0:
                     msg += "✅ 🚨 **【法人抬轎買點】進入收藏區且法人連買！建議投入 3,000 元。**\n\n"
@@ -177,17 +162,24 @@ def run_hunting():
             else:
                 msg += "😴 【穩定】無強烈訊號，維持紀律。\n\n"
             
-            # 稍作延遲，避免密集呼叫被 API 阻擋
             time.sleep(0.3)
         
         msg += "\n"
                 
     return msg
 
+# ==========================================
+# 這裡是啟動引擎，絕對不能刪掉這段！
+# ==========================================
 if __name__ == "__main__":
+    print("🚀 啟動獵殺小隊腳本...")
     discord_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    
     if discord_url:
+        print("✅ Webhook URL 讀取成功！")
         final_message = run_hunting()
+        print("✅ 報表彙整完畢，準備發送到 Discord...")
         send_discord_msg(final_message, discord_url)
+        print("🎉 全部執行完畢！")
     else:
-        print("未設定 Discord Webhook URL")
+        print("❌ 錯誤：未設定 Discord Webhook URL 環境變數！")
