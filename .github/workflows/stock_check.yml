@@ -3,9 +3,7 @@ name: Daily Stock Checker
 on:
   workflow_dispatch:
   schedule:
-    # 台灣時間 09:00 到 13:30 (UTC 1:00 到 5:30)，每一小時 (15分) 執行一次
-    #- cron: '15 1-5 * * 1-5'
-    - cron: '15 * * * *'
+    - cron: '25 * * * *'
 jobs:
   run-check:
     runs-on: ubuntu-latest
