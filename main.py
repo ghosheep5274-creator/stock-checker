@@ -26,34 +26,40 @@ def calculate_beta(stock_data, market_data):
 
 def get_chip_trend(stock_id):
     url = "https://api.finmindtrade.com/api/v4/data"
-    # 延長至 40 天，避免連假導致抓無交易日資料
     start_date = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
     parameter = {
         "dataset": "TaiwanStockInstitutionalInvestorsBuySell",
         "data_id": stock_id,
         "start_date": start_date,
     }
-    # 增加 User-Agent 防止被 API 防火牆阻擋
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
     try:
         resp = requests.get(url, params=parameter, headers=headers, timeout=10)
         data = resp.json()
         
-        if data.get("msg") == "success" and len(data.get("data", [])) > 0:
-            df = pd.DataFrame(data["data"])
+        if data.get("msg") == "success":
+            raw_data = data.get("data", [])
+            if len(raw_data) == 0:
+                print(f"⚠️ [{stock_id}] API 呼叫成功，但近期無法人買賣資料。")
+                return 0, 0
+                
+            df = pd.DataFrame(raw_data)
             
-            # 防呆機制
-            if 'sell_buy' not in df.columns:
-                if 'buy' in df.columns and 'sell' in df.columns:
-                    df['sell_buy'] = df['buy'] - df['sell']
-                else:
-                    return 0, 0
-                    
-            df_foreign = df[df['name'].str.contains('外資')]
-            df_trust = df[df['name'] == '投信']
+            # 強制將所有相關欄位轉為數值，計算買賣超
+            if 'buy' in df.columns and 'sell' in df.columns:
+                df['buy'] = pd.to_numeric(df['buy'], errors='coerce').fillna(0)
+                df['sell'] = pd.to_numeric(df['sell'], errors='coerce').fillna(0)
+                df['sell_buy'] = df['buy'] - df['sell']
+            elif 'sell_buy' in df.columns:
+                df['sell_buy'] = pd.to_numeric(df['sell_buy'], errors='coerce').fillna(0)
+            else:
+                return 0, 0
+                
+            # 破案關鍵：改為比對 API 回傳的英文法人名稱
+            df_foreign = df[df['name'] == 'Foreign_Investor']
+            df_trust = df[df['name'] == 'Investment_Trust']
             
-            # 確保按日期排序
             foreign_daily = df_foreign.sort_values('date').groupby('date')['sell_buy'].sum()
             trust_daily = df_trust.sort_values('date').groupby('date')['sell_buy'].sum()
             
