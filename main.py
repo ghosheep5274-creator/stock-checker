@@ -64,7 +64,19 @@ def get_chip_trend(stock_id):
     return 0, 0
 
 def send_discord_msg(msg, webhook_url):
-    requests.post(webhook_url, json={"content": msg})
+    # 處理 Discord 的 2000 字元限制，每 1900 字切成一塊分批發送
+    chunks = [msg[i:i+1900] for i in range(0, len(msg), 1900)]
+    
+    for chunk in chunks:
+        response = requests.post(webhook_url, json={"content": chunk})
+        # 如果 Discord 拒收，把錯誤印在 GitHub 的日誌裡方便我們抓蟲
+        if response.status_code not in [200, 204]:
+            print(f"❌ Discord 發送失敗，狀態碼: {response.status_code}, 錯誤: {response.text}")
+        else:
+            print("✅ Discord 單筆訊息發送成功！")
+            
+        # 稍微暫停一下，避免發送太快被 Discord 當作惡意洗版
+        time.sleep(1)
 
 def run_hunting():
     stock_categories = {
