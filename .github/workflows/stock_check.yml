@@ -2,8 +2,8 @@ name: Daily Stock Checker
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '25 * * * *'
+  #schedule:
+    #- cron: '25 * * * *'
 
 jobs:
   run-check:
