@@ -6,6 +6,7 @@ import pandas_ta as ta
 import warnings
 import time
 from datetime import datetime, timedelta
+from google import genai
 
 
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -107,6 +108,43 @@ def send_discord_msg(msg, webhook_url):
         else:
             print(f"✅ 第 {idx} 段訊息發送成功！")
         time.sleep(1)
+
+def generate_ai_summary(raw_report):
+    print("🧠 正在呼叫 Gemini 生成戰略總結...")
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("⚠️ 找不到 GEMINI_API_KEY，略過 AI 生成。")
+        return raw_report 
+
+    try:
+        # 使用官方最新寫法初始化 Client
+        client = genai.Client(api_key=api_key)
+        
+        # 設計給 AI 的 System Prompt (人設與任務)
+        prompt = f"""
+        你是一位冷靜、紀律嚴明的專業股票經理人。
+        請閱讀以下量化監控系統產生的原始報表，擷取其中出現「獵殺」、「停損」、「爆量」或「黃金坑」等關鍵動作的標的，
+        寫一段 100 字以內的「盤後決策總結」。要求語氣精煉、流暢，並帶有專業感。
+        如果全部標的都是「靜默」或「穩定」，請直接回覆：「目前全盤穩定，維持既有紀律，無須啟動主動資金。」
+        
+        原始報表：
+        {raw_report}
+        """
+        
+        # 呼叫反應最快的 Flash 模型
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+        )
+        
+        # 將 AI 的精華總結放在原始報表的最上方
+        ai_text = f"🧠 **【AI 戰略總結】**\n{response.text.strip()}\n\n"
+        print("✅ AI 總結生成成功！")
+        return ai_text + raw_report
+        
+    except Exception as e:
+        print(f"❌ AI 生成發生錯誤: {e}")
+        return raw_report
 
 def run_hunting():
     stock_categories = {
@@ -297,6 +335,8 @@ if __name__ == "__main__":
     if discord_url:
         print("✅ Webhook URL 讀取成功！")
         final_message = run_hunting()
+        # --- 💡 新增這行：讓 AI 讀取報表並加上總結 ---
+        final_message = generate_ai_summary(final_message)
         print("✅ 報表彙整完畢，準備發送到 Discord...")
         send_discord_msg(final_message, discord_url)
         print("🎉 全部執行完畢！")
