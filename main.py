@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 import yfinance as yf
 import pandas as pd
@@ -109,43 +110,44 @@ def send_discord_msg(msg, webhook_url):
             print(f"✅ 第 {idx} 段訊息發送成功！")
         time.sleep(1)
 
-def generate_ai_summary(raw_report):
-    print("🧠 正在呼叫 Gemini 生成戰略總結...")
+def generate_ai_summary(json_payload):
+    print("🧠 正在將結構化數據交給 Gemini 進行戰略分析...")
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("⚠️ 找不到 GEMINI_API_KEY，略過 AI 生成。")
-        return raw_report 
+        return "⚠️ 找不到 GEMINI_API_KEY，略過 AI 生成。\n\n"
 
     try:
-        # 使用官方最新寫法初始化 Client
         client = genai.Client(api_key=api_key)
         
-        # 設計給 AI 的 System Prompt (人設與任務)
         prompt = f"""
-        你是一位冷靜、紀律嚴明的專業股票經理人。
-        請閱讀以下量化監控系統產生的原始報表，擷取其中出現「獵殺」、「停損」、「爆量」或「黃金坑」等關鍵動作的標的，
-        寫一段 100 字以內的「盤後決策總結」。要求語氣精煉、流暢，並帶有專業感。
-        如果全部標的都是「靜默」或「穩定」，請直接回覆：「目前全盤穩定，維持既有紀律，無須啟動主動資金。」
+        你是一位冷靜、紀律嚴明的量化股票經理人。請閱讀以下 JSON 格式的盤後量化數據。
+        你的任務是捨棄制式化的數據重述，直接針對有「強烈訊號」的標的給出精煉的決策建議。
         
-        原始報表：
-        {raw_report}
+        【資金調度與決策鐵律】
+        1. 006208 核心：維持每月 5,000 元定期定額。若跌破季線且 RSI 止跌，提示動用 3,000 元主動預算獵殺；若出現大盤破年線的黃金坑，可建議額外調度每月 5,000 元活存預備金支援。
+        2. 長線底倉 (金融/權值)：若未跌破年線且無法人大賣，直接歸類為「長線靜默，抱緊處理」。
+        3. 波段獵殺 (半導體/零組件)：跌破季線且法人倒貨須嚴格停損；若跌破下軌、RSI 止跌且出現爆量/法人買超，提示果斷動用單月 3,000 元額度獵殺。
+        
+        【輸出格式】
+        - 挑出最重要的 2~4 檔標的，列點給出 50 字以內的具體決策建議。
+        - 若全盤無極端變化，請直接回覆：「今日全盤穩定，維持既有紀律，無須啟動主動資金。」
+        
+        今日量化數據 (JSON)：
+        {json.dumps(json_payload, ensure_ascii=False, indent=2)}
         """
         
-        # 呼叫反應最快的 Flash 模型
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
         )
         
-        # 將 AI 的精華總結放在原始報表的最上方
-        ai_text = f"🧠 **【AI 戰略總結】**\n{response.text.strip()}\n\n"
-        print("✅ AI 總結生成成功！")
-        return ai_text + raw_report
+        return f"🧠 **【AI 戰略決策總結】**\n{response.text.strip()}\n\n"
         
     except Exception as e:
         print(f"❌ AI 生成發生錯誤: {e}")
-        return raw_report
+        return "⚠️ AI 分析暫時無法使用。\n\n"
 
+"""
 def run_hunting():
     stock_categories = {
         "📊 【ETF 與 大型權值】": {
@@ -327,6 +329,124 @@ def run_hunting():
         msg += "\n"
                 
     return msg
+"""
+
+def run_hunting():
+    stock_categories = {
+        "📊 【ETF 與 大型權值】": {
+            "006208.TW": "富邦台50",
+            "2330.TW": "台積電"
+        },
+        "🏦 【金融控股與銀行】": {
+            "2801.TW": "彰銀",
+            "2812.TW": "台中銀",
+            "2882.TW": "國泰金",
+            "2885.TW": "元大金",
+            "2887.TW": "台新金",
+            "2888.TW": "新光金"
+        },
+        "💾 【半導體與記憶體】": {
+            "2344.TW": "華邦電",
+            "3372.TWO": "典範",
+            "6533.TW": "晶心科",
+            "6770.TW": "力積電",
+            "8299.TWO": "群聯"
+        },
+        "🔌 【電子零組件與光電】": {
+            "3481.TW": "群創",
+            "3526.TWO": "凡甲",
+            "3679.TW": "新至陞",
+            "2354.TW": "鴻準"
+        }
+    }
+    
+    benchmark = "^TWII"  
+    target_rsi = 45
+    bb_std = 2.0  
+    
+    print("📥 開始下載大盤資料作為基準...")
+    # 將資料抓取期間延長至 2 年 (2y)，確保能計算出 240 日年線
+    market_df = yf.Ticker(benchmark).history(period="2y").dropna()
+    if market_df.empty:
+        print("⚠️ 無法獲取大盤資料，結束執行。")
+        return "⚠️ 大盤資料獲取失敗，系統暫停播報。"
+    
+    msg_raw_data = "📊 **【個股數據儀表板】**\n\n"
+    ai_json_payload = [] # 用來收集給 AI 判斷的結構化陣列
+    
+    for category_name, stocks in stock_categories.items():
+        msg_raw_data += f"======== {category_name} ========\n"
+        is_long_term_core = "ETF" in category_name or "金融" in category_name
+        
+        for ticker, name in stocks.items():
+            print(f"⚙️ 正在處理: {name} ({ticker})...")
+            df = yf.Ticker(ticker).history(period="2y").dropna()
+            
+            if df.empty or len(df) < 60: 
+                continue
+                
+            # 計算指標與量能
+            recent_df = df.copy()
+            recent_df['RSI'] = ta.rsi(recent_df['Close'], length=14)
+            bb = ta.bbands(recent_df['Close'], length=20, std=2.0)
+            recent_df['60MA'] = ta.sma(recent_df['Close'], length=60)
+            recent_df['240MA'] = ta.sma(recent_df['Close'], length=240)
+            recent_df['Volume_20MA'] = recent_df['Volume'].rolling(window=20).mean()
+            
+            if bb is None or bb.empty or recent_df['60MA'].isna().iloc[-1] or pd.isna(recent_df['RSI'].iloc[-1]): 
+                continue
+                
+            # 抓取最新數值
+            last_close = recent_df['Close'].iloc[-1]
+            day_low = recent_df['Low'].iloc[-1]
+            day_high = recent_df['High'].iloc[-1]
+            last_rsi = recent_df['RSI'].iloc[-1]
+            rsi_is_hooking = last_rsi > recent_df['RSI'].iloc[-2]
+            ma60 = recent_df['60MA'].iloc[-1]
+            ma240 = recent_df['240MA'].iloc[-1] if not pd.isna(recent_df['240MA'].iloc[-1]) else ma60
+            suggest_buy = bb.iloc[-1, 0]   
+            suggest_sell = bb.iloc[-1, 2]  
+            
+            current_volume = recent_df['Volume'].iloc[-1]
+            mv20 = recent_df['Volume_20MA'].iloc[-1]
+            is_volume_fueled = current_volume > (mv20 * 1.2)
+            
+            pure_ticker = ticker.split(".")[0]
+            fc, tc = get_chip_trend(pure_ticker)
+            
+            # --- 1. 組合純數據字串 (保留給你看的原始儀表板) ---
+            fc_str = f"連買 {fc} 天" if fc > 0 else (f"連賣 {abs(fc)} 天" if fc < 0 else "無動向")
+            tc_str = f"連買 {tc} 天" if tc > 0 else (f"連賣 {abs(tc)} 天" if tc < 0 else "無動向")
+            
+            msg_raw_data += f"**【{name} ({ticker})】** 收盤: `{last_close:.1f}` | 季線: `{ma60:.1f}` | 年線: `{ma240:.1f}`\n"
+            msg_raw_data += f"📊 RSI: `{last_rsi:.1f}` | 區間: `{suggest_buy:.1f}` ~ `{suggest_sell:.1f}`\n"
+            msg_raw_data += f"🏦 籌碼: 外資 `{fc_str}` | 投信 `{tc_str}`\n\n"
+            
+            # --- 2. 封裝 JSON 結構化數據 (餵給 Gemini 的核心大腦) ---
+            stock_json = {
+                "stock_name": name,
+                "strategy_type": "核心/底倉" if is_long_term_core else "波段獵殺",
+                "close_price": round(last_close, 1),
+                "is_below_60MA": bool(last_close < ma60),
+                "is_below_240MA": bool(last_close < ma240),
+                "rsi_value": round(last_rsi, 1),
+                "rsi_is_hooking": bool(rsi_is_hooking),
+                "is_oversold_bb": bool(day_low < suggest_buy),
+                "is_overheated": bool(last_rsi > 70 or day_high > suggest_sell),
+                "foreign_chip_trend": fc,
+                "trust_chip_trend": tc,
+                "is_bottom_high_volume": bool(is_volume_fueled and day_low < suggest_buy)
+            }
+            ai_json_payload.append(stock_json)
+            
+            time.sleep(0.5)
+            
+    # 迴圈結束，將整包 JSON 丟給 AI 寫總結
+    ai_final_summary = generate_ai_summary(ai_json_payload)
+            
+    # 將 AI 總結放在最上方，原始數據附在下方
+    return ai_final_summary + "---\n" + msg_raw_data
+
 
 if __name__ == "__main__":
     print("🚀 啟動獵殺小隊腳本...")
