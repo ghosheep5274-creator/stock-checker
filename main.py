@@ -116,8 +116,10 @@ def generate_ai_summary(json_payload):
     if not api_key:
         return "⚠️ 找不到 GEMINI_API_KEY，略過 AI 生成。\n\n"
 
-    try:
-        client = genai.Client(api_key=api_key)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            client = genai.Client(api_key=api_key)
         
         prompt = f"""
         你是一位冷靜、紀律嚴明的量化股票經理人。請閱讀以下 JSON 格式的盤後量化數據。
@@ -136,17 +138,23 @@ def generate_ai_summary(json_payload):
         今日量化數據 (JSON)：
         {json.dumps(json_payload, ensure_ascii=False, indent=2)}
         """
-        
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-        )
-        
-        return f"🧠 **【AI 戰略決策總結】**\n{response.text.strip()}\n\n"
-        
-    except Exception as e:
-        print(f"❌ AI 生成發生錯誤: {e}")
-        return "⚠️ AI 分析暫時無法使用。\n\n"
+            chat = client.chats.create(model='gemini-2.5-flash')
+            response = chat.send_message(prompt)
+            
+            return f"🧠 **【AI 戰略決策總結】**\n{response.text.strip()}\n\n"
+            
+        except Exception as e:
+            error_msg = str(e)
+            if "503" in error_msg or "429" in error_msg:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 第一次等 1 秒，第二次等 2 秒
+                    print(f"⚠️ 伺服器忙碌中，等待 {wait_time} 秒後重新嘗試呼叫 AI...")
+                    time.sleep(wait_time)
+                    continue  # 回到迴圈開頭再試一次
+            
+            # 如果不是 503/429，或是重試 3 次都失敗，就果斷放棄
+            print(f"❌ AI 生成發生錯誤: {e}")
+            return "⚠️ AI 分析暫時無法使用（伺服器忙碌中）。\n\n"
 
 """
 def run_hunting():
