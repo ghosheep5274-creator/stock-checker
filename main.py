@@ -127,6 +127,7 @@ def generate_ai_summary(json_payload):
         1. 006208 核心：維持每月 5,000 元定期定額。若跌破季線且 RSI 止跌，提示動用 3,000 元主動預算獵殺；若出現大盤破年線的黃金坑，可建議額外調度每月 5,000 元活存預備金支援。
         2. 長線底倉 (金融/權值)：若未跌破年線且無法人大賣，直接歸類為「長線靜默，抱緊處理」。
         3. 波段獵殺 (半導體/零組件)：跌破季線且法人倒貨須嚴格停損；若跌破下軌、RSI 止跌且出現爆量/法人買超，提示果斷動用單月 3,000 元額度獵殺。
+        4. 新聞情緒防護 (最高優先級)：若標的附有 `recent_news`，請務必綜合判斷。若新聞顯示為「公司個別基本面暴雷 (如財報爆雷、掉單)」，即使技術面超跌也必須發出強烈的【防接刀警告】；若新聞偏向「大盤系統性恐慌 (如國際利空)」，則可維持原有的獵殺建議。
         
         【輸出格式】
         - 挑出最重要的 2~4 檔標的，列點給出 50 字以內的具體決策建議。
@@ -410,6 +411,19 @@ def run_hunting():
             current_volume = recent_df['Volume'].iloc[-1]
             mv20 = recent_df['Volume_20MA'].iloc[-1]
             is_volume_fueled = current_volume > (mv20 * 1.2)
+
+            # --- 💡 新增：極端狀態下的新聞防護網 ---
+            recent_news = []
+            # 只有當「實體跌破季線」或「跌穿布林下軌 (超跌)」時，才去抓新聞
+            if last_close < ma60 or day_low < suggest_buy:
+                print(f"📰 {name} 觸發極端狀態，正在啟動新聞雷達...")
+                try:
+                    raw_news = yf.Ticker(ticker).news
+                    # 只擷取最新的 3 則新聞標題，避免雜訊過多
+                    if raw_news:
+                        recent_news = [n.get('title', '無標題') for n in raw_news[:3]]
+                except Exception as e:
+                    print(f"⚠️ 無法抓取 {name} 新聞: {e}")
             
             pure_ticker = ticker.split(".")[0]
             fc, tc = get_chip_trend(pure_ticker)
@@ -435,7 +449,8 @@ def run_hunting():
                 "is_overheated": bool(last_rsi > 70 or day_high > suggest_sell),
                 "foreign_chip_trend": fc,
                 "trust_chip_trend": tc,
-                "is_bottom_high_volume": bool(is_volume_fueled and day_low < suggest_buy)
+                "is_bottom_high_volume": bool(is_volume_fueled and day_low < suggest_buy),
+                "recent_news": recent_news
             }
             ai_json_payload.append(stock_json)
             
