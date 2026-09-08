@@ -524,7 +524,7 @@ if __name__ == "__main__":
         print("✅ Webhook URL 讀取成功！")
         final_message = run_hunting()
         # --- 💡 新增這行：讓 AI 讀取報表並加上總結 ---
-        final_message = generate_ai_summary(final_message)
+        #final_message = generate_ai_summary(final_message)
         print("✅ 報表彙整完畢，準備發送到 Discord...")
         send_discord_msg(final_message, discord_url)
         print("🎉 全部執行完畢！")
