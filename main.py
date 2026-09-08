@@ -110,6 +110,48 @@ def send_discord_msg(msg, webhook_url):
             print(f"✅ 第 {idx} 段訊息發送成功！")
         time.sleep(1)
 
+def generate_traditional_summary(json_payload):
+    print("🤖 啟動備案：使用傳統規則解析結構化數據...")
+    summary_lines = []
+    
+    for item in json_payload:
+        name = item.get('stock_name', '未知標的')
+        strategy = item.get('strategy_type', '')
+        
+        # 1. 006208 專屬邏輯
+        if "006208" in name or "富邦台50" in name:
+            if item.get('is_below_240MA'):
+                summary_lines.append(f"💎 **{name}**：跌破年線！建議調度每月 5,000 元活存盈餘跨線支援。")
+            elif item.get('is_below_60MA') and item.get('rsi_is_hooking'):
+                summary_lines.append(f"🎯 **{name}**：破季線且 RSI 止跌，可動用主動預算獵殺。")
+            continue
+            
+        # 2. 長線底倉邏輯
+        if strategy == "核心/底倉":
+            if item.get('is_below_240MA'):
+                summary_lines.append(f"⚠️ **{name}**：跌破年線，長線趨勢轉弱。")
+                
+        # 3. 波段獵殺邏輯
+        else:
+            fc = item.get('foreign_chip_trend', 0)
+            tc = item.get('trust_chip_trend', 0)
+            
+            if item.get('is_below_60MA') and (fc < 0 or tc < 0):
+                summary_lines.append(f"💀 **{name}**：破季線且法人倒貨，請嚴格停損！")
+            elif item.get('is_bottom_high_volume'):
+                summary_lines.append(f"🧲 **{name}**：底部爆量，高勝率獵殺點出現！建議動用 3,000 元額度。")
+            elif item.get('is_oversold_bb') and item.get('rsi_is_hooking'):
+                summary_lines.append(f"🎯 **{name}**：跌破下軌且止跌，出現常規買點。")
+            elif item.get('is_overheated'):
+                summary_lines.append(f"🔥 **{name}**：短線過熱，注意停利。")
+                
+        # (如果沒有觸發極端條件，就不會加入 summary_lines，保持版面乾淨)
+
+    if not summary_lines:
+        return "今日全盤穩定，維持既有紀律，無須啟動主動資金。"
+    else:
+        return "\n".join(summary_lines)
+
 def generate_ai_summary(json_payload):
     print("🧠 正在將結構化數據交給 Gemini 進行戰略分析...")
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -154,10 +196,12 @@ def generate_ai_summary(json_payload):
                     import time # 確保上方有 import time
                     time.sleep(wait_time)
                     continue  # 回到迴圈開頭再試一次
+
             
-            # 如果不是 503/429，或是重試 3 次都失敗，就果斷放棄
-            print(f"❌ AI 生成發生錯誤: {e}")
-            return "⚠️ AI 分析暫時無法使用（伺服器忙碌中）。\n\n"
+            # 👇 核心修改：如果 AI 徹底失敗，就呼叫傳統總結備案
+            print(f"❌ AI 生成發生錯誤: {e}，啟動傳統備案！")
+            fallback_text = generate_traditional_summary(json_payload)
+            return f"🤖 **【系統規則總結 (AI 忙碌中)】**\n{fallback_text}\n\n"
 
 """
 def run_hunting():
