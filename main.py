@@ -162,9 +162,10 @@ def generate_ai_summary(json_payload):
 
     # 💡 核心升級：定義「模型瀑布流」 (優先級：高 -> 低)
     models_to_try = [
-        'gemini-2.5-flash',       # 第一把交椅：最新模型，但免費額度最少
-        'gemini-2.0-flash',       # 第二防線：次世代主力，配額較寬裕
-        'gemini-2.5-flash-lite'   # 最後底牌：輕量化模型，速度快且配額最多
+        'gemini-3.5-flash',       # 第一主力：最新世代主力 Flash
+        'gemini-3.5-flash-lite',  # 第二防線：最新世代輕量版，配額通常最充裕
+        'gemini-2.5-flash-lite',  # 第三防線：成熟輕量版
+        'gemini-2.5-flash'        # 備用防線：先前使用的標準版
     ]
 
     client = genai.Client(api_key=api_key)
