@@ -160,6 +160,69 @@ def generate_ai_summary(json_payload):
     if not api_key:
         return "⚠️ 找不到 GEMINI_API_KEY，略過 AI 生成。\n\n"
 
+    # 💡 核心升級：定義「模型瀑布流」 (優先級：高 -> 低)
+    models_to_try = [
+        'gemini-2.5-flash',       # 第一把交椅：最新模型，但免費額度最少
+        'gemini-2.0-flash',       # 第二防線：次世代主力，配額較寬裕
+        'gemini-2.5-flash-lite'   # 最後底牌：輕量化模型，速度快且配額最多
+    ]
+
+    client = genai.Client(api_key=api_key)
+    
+    # 統一向右縮排，保留包含乖離率 (bias_240) 的老手鐵律
+    prompt = f"""
+    你是一位冷靜、紀律嚴明的量化股票經理人。請閱讀以下 JSON 格式的盤後量化數據。
+    你的任務是捨棄制式化的數據重述，直接針對有「強烈訊號」的標的給出精煉的決策建議。
+    
+    【資金調度與決策鐵律】
+    1. 006208 核心：維持每月 5,000 元定期定額。若跌破季線且 RSI 止跌，提示動用 3,000 元主動預算獵殺；若出現大盤破年線的黃金坑，可建議額外調度每月 5,000 元活存預備金支援。
+    2. 長線底倉 (金融/權值)：若未跌破年線且無法人大賣，原則上「長線靜默，抱緊處理」；但若出現極端正乖離 (bias_240 >= 15)，請強烈提示「長線標的出現非理性飆漲，正乖離過大，建議可賣出 1 張收回本金，讓剩餘部位進入零成本無壓狀態」。
+    3. 波段獵殺 (半導體/零組件)：跌破季線且法人倒貨須嚴格停損；若跌破下軌、RSI 止跌且出現爆量/法人買超，提示果斷動用單月 3,000 元額度獵殺。
+    4. 新聞情緒防護 (最高優先級)：若標的附有 `recent_news`，請务必綜合判斷。若新聞顯示為「公司個別基本面暴雷 (如財報爆雷、掉單)」，即使技術面超跌也必須發出強烈的【防接刀警告】；若新聞偏向「大盤系統性恐慌 (如國際利空)」，則可維持原有的獵殺建議。
+    
+    【輸出格式】
+    - 挑出最重要的 2~4 檔標的，列點給出 50 字以內的具體決策建議。
+    - 若全盤無極端變化，請直接回覆：「今日全盤穩定，維持既有紀律，無須啟動主動資金。」
+    
+    今日量化數據 (JSON)：
+    {json.dumps(json_payload, ensure_ascii=False, indent=2)}
+    """
+    
+    import time # 確保載入時間模組
+    
+    # 開始逐一測試模型
+    for model_name in models_to_try:
+        print(f"🔄 嘗試喚醒 AI 腦區：[{model_name}] ...")
+        try:
+            chat = client.chats.create(model=model_name)
+            response = chat.send_message(prompt)
+            
+            print(f"✅ 成功使用 {model_name} 完成戰略分析！")
+            # 在標題偷偷標註是哪個模型立大功，方便你觀察
+            return f"🧠 **【AI 戰略決策總結 ({model_name})】**\n{response.text.strip()}\n\n"
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"⚠️ [{model_name}] 遭遇限制 (429/503)，準備切換備用大腦...")
+            
+            # 🛡️ 絕對防禦機制：強制冷卻 3 秒，向 Google 證明這不是惡意攻擊
+            time.sleep(3)
+            continue # 進入下一個迴圈，切換下一個模型
+
+    # 👇 如果三個 AI 模型額度全部用光 (極端情況)，無縫啟動傳統備案
+    print("❌ 所有 AI 模型皆已達限流上限，啟動傳統量化備案！")
+    fallback_text = generate_traditional_summary(json_payload)
+    return f"🤖 **【系統規則總結 (AI 忙碌中)】**\n{fallback_text}\n\n"
+
+
+
+'''
+def generate_ai_summary(json_payload):
+    print("🧠 正在將結構化數據交給 Gemini 進行戰略分析...")
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return "⚠️ 找不到 GEMINI_API_KEY，略過 AI 生成。\n\n"
+
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -204,6 +267,7 @@ def generate_ai_summary(json_payload):
             print(f"❌ AI 生成發生錯誤: {e}，啟動傳統備案！")
             fallback_text = generate_traditional_summary(json_payload)
             return f"🤖 **【系統規則總結 (AI 忙碌中)】**\n{fallback_text}\n\n"
+'''
 
 
 def run_hunting():
