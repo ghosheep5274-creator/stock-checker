@@ -204,11 +204,12 @@ def generate_ai_summary(json_payload):
             
         except Exception as e:
             error_msg = str(e)
-            print(f"⚠️ [{model_name}] 遭遇限制 (429/503)，準備切換備用大腦...")
+            # 印出前 120 個字元，立刻知道是 404 (名字錯)、429 (超額) 還是 503 (塞車)
+            print(f"⚠️ [{model_name}] 呼叫失敗: {error_msg[:120]}...")
             
-            # 🛡️ 絕對防禦機制：強制冷卻 3 秒，向 Google 證明這不是惡意攻擊
+            # 🛡️ 強制冷卻 3 秒
             time.sleep(3)
-            continue # 進入下一個迴圈，切換下一個模型
+            continue
 
     # 👇 如果三個 AI 模型額度全部用光 (極端情況)，無縫啟動傳統備案
     print("❌ 所有 AI 模型皆已達限流上限，啟動傳統量化備案！")
