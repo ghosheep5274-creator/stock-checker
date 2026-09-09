@@ -331,9 +331,16 @@ def run_hunting():
                 pe_ratio = info.get('trailingPE', 0)
                 pb_ratio = info.get('priceToBook', 0)
                 rev_growth = info.get('revenueGrowth', 0)
-            except Exception:
+                # 👇 確認有抓到財報資料，就在終端機印出提示
+                if pe_ratio != 0 or pb_ratio != 0:
+                    print(f"   ✅ [基本面就緒] PE: {pe_ratio:.1f} | PB: {pb_ratio:.2f} | 營收成長: {rev_growth*100:.1f}%")
+                else:
+                    print(f"   ⚠️ [基本面空窗] Yahoo 查無此檔財報數據")
+                    
+            except Exception as e:
                 pe_ratio, pb_ratio, rev_growth = 0, 0, 0
-                
+                print(f"   ❌ [基本面抓取失敗] 發生錯誤: {e}")
+
             # 計算指標與量能
             recent_df = df.copy()
             recent_df['RSI'] = ta.rsi(recent_df['Close'], length=14)
