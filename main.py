@@ -240,6 +240,7 @@ def generate_ai_summary(json_payload):
             2. 長線底倉 (金融/權值)：若未跌破年線且無法人大賣，原則上「長線靜默，抱緊處理」；但若出現極端正乖離 (bias_240 >= 15)，請強烈提示「長線標的出現非理性飆漲，正乖離過大，建議可賣出 1 張收回本金，讓剩餘部位進入零成本無壓狀態」。
             3. 波段獵殺 (半導體/零組件)：跌破季線且法人倒貨須嚴格停損；若跌破下軌、RSI 止跌且出現爆量/法人買超，提示果斷動用單月 3,000 元額度獵殺。
             4. 新聞情緒防護 (最高優先級)：若標的附有 `recent_news`，請務必綜合判斷。若新聞顯示為「公司個別基本面暴雷 (如財報爆雷、掉單)」，即使技術面超跌也必須發出強烈的【防接刀警告】；若新聞偏向「大盤系統性恐慌 (如國際利空)」，則可維持原有的獵殺建議。
+            5. 基本面護城河判讀：財報屬於落後指標。對於「金融/權值」請關注 PB 是否合理；對於「半導體/電子零組件」等景氣循環股，請謹記「高本益比買進、低本益比賣出」的循環特性，若營收成長率 (revenue_growth_pct) 嚴重衰退且技術面破線，請視為景氣反轉，發出強烈避險警告。
             
             【輸出格式】
             - 挑出最重要的 2~4 檔標的，列點給出 50 字以內的具體決策建議。
@@ -320,10 +321,18 @@ def run_hunting():
         
         for ticker, name in stocks.items():
             print(f"⚙️ 正在處理: {name} ({ticker})...")
+            ticker_obj = yf.Ticker(ticker)
             df = yf.Ticker(ticker).history(period="2y").dropna()
             
             if df.empty or len(df) < 60: 
                 continue
+            try:
+                info = ticker_obj.info
+                pe_ratio = info.get('trailingPE', 0)
+                pb_ratio = info.get('priceToBook', 0)
+                rev_growth = info.get('revenueGrowth', 0)
+            except Exception:
+                pe_ratio, pb_ratio, rev_growth = 0, 0, 0
                 
             # 計算指標與量能
             recent_df = df.copy()
@@ -388,6 +397,9 @@ def run_hunting():
                 "rsi_is_hooking": bool(rsi_is_hooking),
                 "is_oversold_bb": bool(day_low < suggest_buy),
                 "is_overheated": bool(last_rsi > 70 or day_high > suggest_sell),
+                "fundamental_PE": round(pe_ratio, 2) if pe_ratio else "無",
+                "fundamental_PB": round(pb_ratio, 2) if pb_ratio else "無",
+                "revenue_growth_pct": round(rev_growth * 100, 2) if rev_growth else "無",
                 "foreign_chip_trend": fc,
                 "trust_chip_trend": tc,
                 "is_bottom_high_volume": bool(is_volume_fueled and day_low < suggest_buy),
